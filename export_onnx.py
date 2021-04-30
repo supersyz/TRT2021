@@ -136,211 +136,28 @@ if __name__ == "__main__":
     img = img[np.newaxis,:]
     image = torch.from_numpy(img.copy()).to(torch.device('cuda'))
     image = image.type(torch.float32)
-    # torch.onnx.export(model, image, 'panoptic_fcn11.onnx', output_names={
-    #     #   'scores', 'classes', 'pred_inst'}, opset_version=11, do_constant_folding=True, verbose=True)
-    #                   'pred_inst', 'classes', 'scores', }, opset_version=11, do_constant_folding=True, verbose=True)
-    # print('Exporting done.')
+    image = torch.randn([1, 3, h, w]).to(torch.device('cuda'))
+    torch.onnx.export(model, image, 'panoptic_fcn11.onnx', output_names={
+
+                      'pred_inst', 'classes', 'scores', }, opset_version=11, do_constant_folding=True, verbose=True)
+    print('Exporting done.')
 
 #     image = torch.randn([1, 3, h, w]).to(torch.device('cuda'))
-    n_round = 10
-    torch.cuda.synchronize()
-    begin = time.time()
-    classes_out_torch,pred_inst_out_torch,scores_out_torch = model(image)
-    print(pred_inst_out_torch.dtype)
-    print(classes_out_torch.shape,scores_out_torch.shape,pred_inst_out_torch.shape)
-
-    scores_out_torch = scores_out_torch.cpu().detach().numpy()
-    pred_inst_out_torch = pred_inst_out_torch.cpu().detach().numpy()
-    classes_out_torch = classes_out_torch.cpu().detach().numpy()
-    for i in range(n_round):
-        model(image)
-    torch.cuda.synchronize()
-    end = time.time()
-    pytorch_time = (end-begin) / n_round
-    print('mean_time:',pytorch_time)
+#     n_round = 10
+#     torch.cuda.synchronize()
+#     begin = time.time()
+#     classes_out_torch,pred_inst_out_torch,scores_out_torch = model(image)
+#     print(pred_inst_out_torch.dtype)
+#     print(classes_out_torch.shape,scores_out_torch.shape,pred_inst_out_torch.shape)
+#
+#     scores_out_torch = scores_out_torch.cpu().detach().numpy()
+#     pred_inst_out_torch = pred_inst_out_torch.cpu().detach().numpy()
+#     classes_out_torch = classes_out_torch.cpu().detach().numpy()
+#     for i in range(n_round):
+#         model(image)
+#     torch.cuda.synchronize()
+#     end = time.time()
+#     pytorch_time = (end-begin) / n_round
+#     print('mean_time:',pytorch_time)
 #
 
-    from trt_lite import TrtLite
-    import pycuda
-    import os
-    import tensorrt
-    import pycuda.driver as cuda
-    class PyTorchTensorHolder(pycuda.driver.PointerHolderBase):
-        def __init__(self,tensor):
-            super(PyTorchTensorHolder,self).__init__()
-            self.tensor = tensor
-        def get_pointer(self):
-            return self.tensor.data_ptr()
-
-    tensorrt.init_libnvinfer_plugins(None, "")
-    #engine_file_path = 'panoptic_fcn_fp16.trt'
-    for engine_file_path in ['panoptic_fcn.trt','panoptic_fcn_fp16.trt']:
-        if not os.path.exists(engine_file_path):
-            print('bad!')
-        else:
-            print('=='+engine_file_path+'==')
-        trt = TrtLite(engine_file_path=engine_file_path)
-        trt.print_info()
-        i2shape = {0:(1,3,h,w)}
-        io_info = trt.get_io_info(i2shape)
-
-       # print(io_info)
-        # print(io_info[1])
-        # print(io_info[1][2])
-        d_buffers = trt.allocate_io_buffers(i2shape,True)
-        scores_out = np.zeros(io_info[1][2],dtype=np.float32)
-        pred_inst_out = np.zeros(io_info[2][2],dtype=np.int32)
-        classes_out = np.zeros(io_info[3][2],dtype=np.float32)
-        #print(d_buffers)
-        # #output_data_trt =
-        cuda.memcpy_dtod(d_buffers[0],PyTorchTensorHolder(image),image.nelement()*image.element_size())
-        trt.execute(d_buffers,i2shape)
-        cuda.memcpy_dtoh(scores_out,d_buffers[1])
-        cuda.memcpy_dtoh(pred_inst_out, d_buffers[2])
-        cuda.memcpy_dtoh(classes_out, d_buffers[3])
-#
-        cuda.Context.synchronize()
-        begin = time.time()
-        for i in range(n_round):
-            trt.execute(d_buffers,i2shape)
-        cuda.Context.synchronize()
-        end = time.time()
-        trt_time = (end-begin)/n_round
-        print('trt:',trt_time)
-        print('Speedup:',pytorch_time/trt_time)
-        #np.seterr(divide='ignore', invalid='ignore')
-        #print(pred_inst_out)
-        print(scores_out.dtype)
-        print(scores_out_torch.dtype)
-        #print('~~~~~~~~~~~~~~')
-        #print(classes_out_torch)
-        #print(classes_out-classes_out_torch)
-        #print('scroes:',scores_out,'scroestorch:',scores_out_torch)
-        #print('inst:',pred_inst_out,'insttorch:',pred_inst_out_torch)
-        #print('class',classes_out,'classtorch',classes_out_torch)
-
-        import pandas as pd
-
-        #scores_out_torch[scores_out_torch==0] = np.nan
-        #pred_inst_out_torch[pred_inst_out_torch==0] = np.nan
-        #classes_out_torch[classes_out_torch==0] = np.nan
-
-        print(scores_out.shape,pred_inst_out.shape,classes_out.shape)
-        #abs1 = np.abs((scores_out - scores_out_torch))
-        #abs2 = np.abs(scores_out_torch)
-        print('dtype:',classes_out_torch.dtype)
-        print(np.max(np.max(scores_out - scores_out_torch)))
-
-        print(np.max(np.max(classes_out - classes_out_torch)))
-        #print(np.max(np.max()))
-        #print('Avg diff percentage:', np.mean(np.abs((scores_out - scores_out_torch)) / (np.abs(scores_out_torch)+10**(-8))) )
-        #print('Avg diff percentage:', np.mean(np.abs((pred_inst_out - pred_inst_out_torch) / (np.abs(pred_inst_out_torch)+1 ))))
-        scores_out = scores_out.astype(np.float128)
-        scores_out_torch = scores_out_torch.astype(np.float128)
-        abs1 = np.abs(scores_out - scores_out_torch,dtype=np.float128)
-        abs2 = np.abs(scores_out_torch,dtype=np.float128)
-        print('Avg diff percentage:',np.mean(abs1/(abs2+10**(-20))))
-
-        #print('Avg diff percentage:', np.mean(np.abs((classes_out - classes_out_torch)) / (np.abs(classes_out_torch)  ) ))
-        classes_out = classes_out.astype(np.float128)
-        classes_out_torch = classes_out_torch.astype(np.float128)
-        abs1 = np.abs((classes_out - classes_out_torch),dtype=np.float128)
-        abs2 = np.abs(classes_out_torch,dtype = np.float128)
-        #print('Avg diff percentage:', np.mean(abs1 / (abs2 + 10 ** (-20))))
-        scores_out_ = pd.DataFrame(scores_out)
-        scores_out_.to_csv('scores_out'+engine_file_path[:-4]+'.csv')
-        scores_out_torch_ = pd.DataFrame(scores_out_torch)
-        scores_out_torch_.to_csv('scores_out_torch''.csv')
-
-        pred_inst_out_ = pd.DataFrame(pred_inst_out)
-        pred_inst_out_.to_csv('pred_inst_out'+engine_file_path[:-4]+'.csv')
-        pred_inst_out_torch = pred_inst_out_torch.astype(np.int32)
-        pred_inst_out_torch_ = pd.DataFrame(pred_inst_out_torch)
-        pred_inst_out_torch_.to_csv('pred_inst_out_torch.csv')
-        classes_out_ = pd.DataFrame(classes_out[0][0])
-        classes_out_.to_csv('classes_out'+engine_file_path[:-4]+'.csv')
-        classes_out_torch_ = pd.DataFrame(classes_out_torch[0][0])
-        classes_out_torch_.to_csv('classes_out_torch.csv')
-
-
-    # # TRT_LOGGER = trt.Logger()
-    # logger = trt.Logger(trt.Logger.INFO)
-    # with open(engine_file_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
-    #     engine = runtime.deserialize_cuda_engine(f.read())
-    #     print(engine)
-    #     context = engine.create_execution_context()
-
-    # explicit_batch = 1 << (int)(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
-    # with trt.Builder(TRT_LOGGER) as builder, \
-    #         builder.create_network(explicit_batch) as network, \
-    #         trt.OnnxParser(network, TRT_LOGGER) as parser:
-
-
-    # if args.input:
-    #     if len(args.input) == 1:
-    #         args.input = glob.glob(os.path.expanduser(args.input[0]))
-    #         assert args.input, "The input path(s) was not found"
-    #     for path in tqdm.tqdm(args.input, disable=not args.output):
-    #         # use PIL, to be consistent with evaluation
-    #         img = read_image(path, format="BGR")
-    #         start_time = time.time()
-    #         predictions, visualized_output = demo.run_on_image(img)
-    #         logger.info(
-    #             "{}: {} in {:.2f}s".format(
-    #                 path,
-    #                 "detected {} instances".format(
-    #                     len(predictions["instances"]))
-    #                 if "instances" in predictions
-    #                 else "finished",
-    #                 time.time() - start_time,
-    #             )
-    #         )
-    #
-    #         if args.output:
-    #             if os.path.isdir(args.output):
-    #                 assert os.path.isdir(args.output), args.output
-    #                 out_filename = os.path.join(
-    #                     args.output, os.path.basename(path))
-    #             else:
-    #                 assert len(
-    #                     args.input) == 1, "Please specify a directory with args.output"
-    #                 out_filename = args.output
-    #             visualized_output.save(out_filename)
-    #         else:
-    #             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    #             cv2.imshow(
-    #                 WINDOW_NAME, visualized_output.get_image()[:, :, ::-1])
-    #             if cv2.waitKey(0) == 27:
-    #                 break  # esc to quit
-    # elif args.webcam:
-    #     assert args.input is None, "Cannot have both --input and --webcam!"
-    #     assert args.output is None, "output not yet supported with --webcam!"
-    #     cam = cv2.VideoCapture(0)
-    #     for vis in tqdm.tqdm(demo.run_on_video(cam)):
-    #         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    #         cv2.imshow(WINDOW_NAME, vis)
-    #         if cv2.waitKey(1) == 27:
-    #             break  # esc to quit
-    #     cam.release()
-    #     cv2.destroyAllWindows()
-    # elif args.video_input:
-    #     video = cv2.VideoCapture(args.video_input)
-    #     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
-    #     height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    #     frames_per_second = video.get(cv2.CAP_PROP_FPS)
-    #     num_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    #     basename = os.path.basename(args.video_input)
-    #
-    #     while(video.isOpened()):
-    #         ret, frame = video.read()
-    #         print(frame.shape)
-    #         image = aug.get_transform(frame).apply_image(frame)
-    #         image = torch.as_tensor(image.astype(
-    #             "float32").transpose(2, 0, 1)).unsqueeze(0).cuda()
-    #         print(image.shape)
-    #         res = model(image)
-    #         print(res)
-    #         res = vis_res_fast(res, frame, metadata)
-    #         cv2.imshow('frame', res)
-    #         if cv2.waitKey(1) & 0xFF == ord('q'):
-    #             break
